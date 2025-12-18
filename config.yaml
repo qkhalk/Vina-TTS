@@ -2,6 +2,14 @@ text_settings:
   max_chars_per_chunk: 256
   max_total_chars_streaming: 3000
 
+colab:
+  enabled: false
+  backend_mode: local
+  endpoint_url: ""
+  auth_token: ""
+  timeout_seconds: 60
+  health_check_interval: 30
+
 backbone_configs:
   "VieNeu-TTS (GPU)":
     repo: pnnbao-ump/VieNeu-TTS

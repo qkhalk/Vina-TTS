@@ -1,8 +1,11 @@
 import gradio as gr
 import yaml
 import os
-from model_manager import ModelManager, ModelStatus
+import json
+import secrets
+from model_manager import ModelManager, ModelStatus, BackendMode
 from auth import verify_admin_password, UserManager, SessionManager, UserRole
+from colab.notebook_generator import NotebookGenerator
 
 
 # Load configuration
@@ -249,6 +252,133 @@ def refresh_user_data(token):
     return get_users_list(token), gr.update(choices=get_users_list_for_dropdown(token))
 
 
+def switch_backend_mode_action(token, mode):
+    """Admin action: Switch backend mode."""
+    if not validate_admin_session(token):
+        return "❌ Unauthorized"
+    
+    try:
+        # Validate mode is available
+        if mode == "Google Colab" and not model_manager._colab_connected:
+            return "❌ Cannot switch to Colab: Not connected to Colab backend"
+        
+        if mode == "Local" and model_manager.status != ModelStatus.LOADED:
+            return "❌ Cannot switch to Local: No local model loaded"
+        
+        # Switch mode
+        new_mode = BackendMode.REMOTE if mode == "Google Colab" else BackendMode.LOCAL
+        model_manager.backend_mode = new_mode
+        
+        return f"✅ Switched to {mode} backend"
+        
+    except Exception as e:
+        return f"❌ Error switching backend: {str(e)}"
+
+
+def generate_notebook_action(token, backbone, codec, device):
+    """Admin action: Generate and download Colab notebook."""
+    if not validate_admin_session(token):
+        return "❌ Unauthorized", None
+    
+    try:
+        backbone_config = BACKBONE_CONFIGS.get(backbone, {})
+        codec_config = CODEC_CONFIGS.get(codec, {})
+        
+        if not backbone_config or not codec_config:
+            return "❌ Invalid model configuration", None
+        
+        # Generate notebook
+        generator = NotebookGenerator()
+        notebook_json, auth_token = generator.generate(
+            backbone_repo=backbone_config["repo"],
+            codec_repo=codec_config["repo"],
+            device=device.lower()
+        )
+        
+        # Save to temp file for download
+        temp_path = "vieneu_tts_colab.ipynb"
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            f.write(notebook_json)
+        
+        message = f"✅ Notebook generated!\\n\\n🔑 **Auth Token:** `{auth_token}`\\n\\n📥 Download the notebook and run it in Google Colab."
+        
+        return message, temp_path
+        
+    except Exception as e:
+        return f"❌ Error generating notebook: {str(e)}", None
+
+
+def connect_colab_action(token, endpoint_url, auth_token):
+    """Admin action: Connect to Colab backend."""
+    if not validate_admin_session(token):
+        return "❌ Unauthorized", gr.update()
+    
+    if not endpoint_url or not auth_token:
+        return "❌ Please provide both endpoint URL and auth token", gr.update()
+    
+    result = model_manager.set_colab_connection(endpoint_url.strip(), auth_token.strip())
+    
+    if result["success"]:
+        status = f"✅ {result['message']}"
+    else:
+        status = f"❌ {result['message']}"
+    
+    # Return status and updated connection display
+    return status, gr.update(value=format_colab_status())
+
+
+def disconnect_colab_action(token):
+    """Admin action: Disconnect from Colab backend."""
+    if not validate_admin_session(token):
+        return "❌ Unauthorized", gr.update()
+    
+    result = model_manager.disconnect_colab()
+    
+    if result["success"]:
+        status = f"✅ {result['message']}"
+    else:
+        status = f"❌ {result['message']}"
+    
+    return status, gr.update(value=format_colab_status())
+
+
+def test_colab_connection_action(token):
+    """Admin action: Test Colab connection."""
+    if not validate_admin_session(token):
+        return "❌ Unauthorized"
+    
+    health = model_manager.check_colab_health()
+    
+    if health.get("connected"):
+        health_data = health.get("health", {})
+        gpu_mem = health_data.get("gpu_memory_used_gb", 0)
+        model_loaded = health_data.get("model_loaded", False)
+        
+        return f"✅ Connection OK\\n\\n**Model Loaded:** {'Yes' if model_loaded else 'No'}\\n**GPU Memory:** {gpu_mem:.2f} GB"
+    else:
+        return f"❌ {health.get('message', 'Connection failed')}"
+
+
+def format_colab_status():
+    """Format Colab connection status for display."""
+    if model_manager._colab_connected:
+        health = model_manager.check_colab_health()
+        if health.get("connected"):
+            health_data = health.get("health", {})
+            lines = [
+                "**Status:** 🟢 Connected",
+                f"**Endpoint:** {model_manager._colab_endpoint}",
+                f"**Model Loaded:** {'Yes' if health_data.get('model_loaded') else 'No'}",
+            ]
+            if health_data.get("gpu_available"):
+                lines.append(f"**GPU Memory:** {health_data.get('gpu_memory_used_gb', 0):.2f} GB")
+            return "\\n".join(lines)
+        else:
+            return f"**Status:** 🔴 Disconnected\\n{health.get('message', '')}"
+    else:
+        return "**Status:** ⚪ Not Connected"
+
+
 def toggle_access_protection(token, enabled):
     """Admin action: Toggle user access protection."""
     if not validate_admin_session(token):
@@ -384,6 +514,88 @@ def create_admin_interface():
                     restart_model_btn = gr.Button("🔄 Restart Model")
                 
                 model_action_status = gr.Markdown("")
+            
+            # Backend Selection Panel
+            with gr.Group():
+                gr.Markdown("## 🔄 Backend Selection")
+                gr.Markdown("*Choose where TTS processing happens: Local machine or Google Colab*")
+                
+                # Backend mode selector
+                backend_mode_radio = gr.Radio(
+                    choices=["Local", "Google Colab"],
+                    value="Local",
+                    label="Active Backend Mode",
+                    info="Select which backend to use for TTS synthesis"
+                )
+                backend_switch_status = gr.Markdown("")
+                
+                with gr.Row():
+                    # Local Backend Status
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 💻 Local Backend")
+                        local_backend_status = gr.Markdown(
+                            format_status(model_manager.get_status())
+                        )
+                    
+                    # Colab Backend Status
+                    with gr.Column(scale=1):
+                        gr.Markdown("### ☁️ Google Colab Backend")
+                        colab_backend_status = gr.Markdown(format_colab_status())
+                
+                # Colab Configuration
+                with gr.Accordion("⚙️ Colab Configuration", open=False):
+                    gr.Markdown("### Step 1: Generate Notebook")
+                    gr.Markdown("Configure model settings and download a pre-configured Colab notebook.")
+                    
+                    with gr.Row():
+                        notebook_backbone = gr.Dropdown(
+                            choices=list(BACKBONE_CONFIGS.keys()),
+                            value=list(BACKBONE_CONFIGS.keys())[0] if BACKBONE_CONFIGS else None,
+                            label="Backbone Model",
+                            scale=2
+                        )
+                        notebook_codec = gr.Dropdown(
+                            choices=list(CODEC_CONFIGS.keys()),
+                            value=list(CODEC_CONFIGS.keys())[0] if CODEC_CONFIGS else None,
+                            label="Codec",
+                            scale=2
+                        )
+                        notebook_device = gr.Radio(
+                            choices=["Auto", "CUDA", "CPU"],
+                            value="Auto",
+                            label="Device",
+                            scale=1
+                        )
+                    
+                    generate_notebook_btn = gr.Button("📥 Download Colab Notebook", variant="primary")
+                    notebook_file = gr.File(label="Generated Notebook", visible=True)
+                    notebook_status = gr.Markdown("")
+                    
+                    gr.Markdown("### Step 2: Run in Colab")
+                    gr.Markdown("1. Upload the downloaded notebook to [Google Colab](https://colab.research.google.com/)\\n"
+                               "2. Run all cells in the notebook\\n"
+                               "3. Copy the **Endpoint URL** and **Auth Token** displayed at the end")
+                    
+                    gr.Markdown("### Step 3: Connect to Colab")
+                    
+                    colab_endpoint_url = gr.Textbox(
+                        label="Endpoint URL",
+                        placeholder="https://abc123.ngrok.io",
+                        info="Copy from Colab notebook output"
+                    )
+                    colab_auth_token = gr.Textbox(
+                        label="Auth Token",
+                        type="password",
+                        placeholder="Enter the auth token from notebook",
+                        info="Keep this secret!"
+                    )
+                    
+                    with gr.Row():
+                        connect_colab_btn = gr.Button("🔗 Connect", variant="primary")
+                        disconnect_colab_btn = gr.Button("🔌 Disconnect")
+                        test_colab_btn = gr.Button("🧪 Test Connection")
+                    
+                    colab_action_status = gr.Markdown("")
             
             # User Management Panel
             with gr.Group():
@@ -534,6 +746,37 @@ def create_admin_interface():
             fn=refresh_user_data,
             inputs=[session_token],
             outputs=[users_list_display, user_select]
+        )
+        
+        # Backend Selection event handlers
+        backend_mode_radio.change(
+            fn=switch_backend_mode_action,
+            inputs=[session_token, backend_mode_radio],
+            outputs=[backend_switch_status]
+        )
+        
+        generate_notebook_btn.click(
+            fn=generate_notebook_action,
+            inputs=[session_token, notebook_backbone, notebook_codec, notebook_device],
+            outputs=[notebook_status, notebook_file]
+        )
+        
+        connect_colab_btn.click(
+            fn=connect_colab_action,
+            inputs=[session_token, colab_endpoint_url, colab_auth_token],
+            outputs=[colab_action_status, colab_backend_status]
+        )
+        
+        disconnect_colab_btn.click(
+            fn=disconnect_colab_action,
+            inputs=[session_token],
+            outputs=[colab_action_status, colab_backend_status]
+        )
+        
+        test_colab_btn.click(
+            fn=test_colab_connection_action,
+            inputs=[session_token],
+            outputs=[colab_action_status]
         )
     
     return admin_interface

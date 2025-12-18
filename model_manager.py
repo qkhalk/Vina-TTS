@@ -22,6 +22,11 @@ class ModelStatus(str, Enum):
     ERROR = "error"
 
 
+class BackendMode(str, Enum):
+    LOCAL = "local"
+    REMOTE = "remote"
+
+
 class ModelManager:
     """Singleton manager for TTS model lifecycle."""
     
@@ -38,6 +43,13 @@ class ModelManager:
         self.config = {}
         self.using_lmdeploy = False
         self._model_lock = threading.Lock()
+        
+        # Colab backend support
+        self._backend_mode = BackendMode.LOCAL
+        self._colab_client = None
+        self._colab_endpoint = ""
+        self._colab_token = ""
+        self._colab_connected = False
     
     @classmethod
     def get_instance(cls) -> "ModelManager":
@@ -55,6 +67,9 @@ class ModelManager:
             "error": self.error_message,
             "config": self.config.copy(),
             "backend": "LMDeploy" if self.using_lmdeploy else "Standard",
+            "backend_mode": self._backend_mode.value,
+            "colab_connected": self._colab_connected,
+            "colab_endpoint": self._colab_endpoint if self._colab_connected else "",
             "supported_voices": self.get_supported_voices(),
         }
         
@@ -264,12 +279,15 @@ class ModelManager:
     
     def get_model(self):
         """
-        Get current TTS model instance.
+        Get current TTS model instance based on active backend mode.
         
         Returns:
-            TTS model if loaded, None otherwise
+            TTS model (local) or ColabTTSClient (remote), None if not available
         """
-        return self.tts if self.status == ModelStatus.LOADED else None
+        if self._backend_mode == BackendMode.REMOTE:
+            return self._colab_client if self._colab_connected else None
+        else:
+            return self.tts if self.status == ModelStatus.LOADED else None
     
     def get_supported_voices(self, all_voices: Optional[List[str]] = None) -> List[str]:
         """
@@ -371,3 +389,147 @@ class ModelManager:
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
         gc.collect()
+    
+    # Colab Backend Management
+    
+    @property
+    def backend_mode(self) -> BackendMode:
+        """Get current backend mode."""
+        return self._backend_mode
+    
+    @backend_mode.setter
+    def backend_mode(self, mode: BackendMode):
+        """Set backend mode."""
+        if isinstance(mode, str):
+            mode = BackendMode(mode)
+        self._backend_mode = mode
+    
+    def set_colab_connection(self, endpoint_url: str, auth_token: str) -> Dict[str, Any]:
+        """
+        Configure Colab backend connection.
+        
+        Args:
+            endpoint_url: Colab ngrok URL
+            auth_token: Authentication token
+            
+        Returns:
+            Status dict with success/error info
+        """
+        try:
+            from colab.client import ColabTTSClient
+            
+            # Test connection
+            test_client = ColabTTSClient(endpoint_url, auth_token, timeout=10)
+            success, message, latency = test_client.test_connection()
+            
+            if not success:
+                return {
+                    "success": False,
+                    "message": f"Connection test failed: {message}",
+                }
+            
+            # Connection successful, save client
+            self._colab_client = test_client
+            self._colab_endpoint = endpoint_url
+            self._colab_token = auth_token
+            self._colab_connected = True
+            
+            return {
+                "success": True,
+                "message": f"Connected successfully (latency: {latency:.0f}ms)",
+                "latency_ms": latency
+            }
+            
+        except Exception as e:
+            self._colab_connected = False
+            return {
+                "success": False,
+                "message": f"Failed to connect: {str(e)}"
+            }
+    
+    def disconnect_colab(self) -> Dict[str, Any]:
+        """
+        Disconnect from Colab backend.
+        
+        Returns:
+            Status dict with success/error info
+        """
+        try:
+            if self._colab_client:
+                del self._colab_client
+                self._colab_client = None
+            
+            self._colab_endpoint = ""
+            self._colab_token = ""
+            self._colab_connected = False
+            
+            # Switch to local mode if was using remote
+            if self._backend_mode == BackendMode.REMOTE:
+                self._backend_mode = BackendMode.LOCAL
+            
+            return {
+                "success": True,
+                "message": "Disconnected from Colab successfully"
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Failed to disconnect: {str(e)}"
+            }
+    
+    def check_colab_health(self) -> Dict[str, Any]:
+        """
+        Check Colab backend health.
+        
+        Returns:
+            Health status dict
+        """
+        if not self._colab_connected or not self._colab_client:
+            return {
+                "connected": False,
+                "message": "Not connected to Colab"
+            }
+        
+        try:
+            health = self._colab_client.health_check()
+            return {
+                "connected": True,
+                "health": health,
+                "message": "Colab backend is healthy"
+            }
+        except Exception as e:
+            return {
+                "connected": False,
+                "message": f"Health check failed: {str(e)}"
+            }
+    
+    def get_active_backend_status(self) -> Dict[str, Any]:
+        """
+        Get status of active backend for UI display.
+        
+        Returns:
+            Status dict with backend info
+        """
+        if self._backend_mode == BackendMode.REMOTE:
+            if self._colab_connected:
+                health = self.check_colab_health()
+                return {
+                    "mode": "remote",
+                    "status": "connected" if health.get("connected") else "disconnected",
+                    "endpoint": self._colab_endpoint,
+                    "health": health.get("health", {})
+                }
+            else:
+                return {
+                    "mode": "remote",
+                    "status": "not_configured",
+                    "message": "Colab backend not connected"
+                }
+        else:
+            return {
+                "mode": "local",
+                "status": self.status.value,
+                "model_loaded": self.status == ModelStatus.LOADED,
+                "backend": "LMDeploy" if self.using_lmdeploy else "Standard"
+            }
