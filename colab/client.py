@@ -59,7 +59,7 @@ class ColabTTSClient:
         
         Args:
             text: Text to synthesize
-            voice_sample_path: Path to voice sample audio
+            voice_sample_path: Path to voice sample audio (will be read and sent as base64)
             voice_transcript: Transcript of voice sample
             speed: Speech speed multiplier
             watermark: Whether to add audio watermark
@@ -68,9 +68,18 @@ class ColabTTSClient:
             Audio data as bytes, or None if request fails
         """
         try:
+            # Read and encode voice sample as base64
+            import base64
+            import os
+            
+            voice_audio_base64 = ""
+            if voice_sample_path and os.path.exists(voice_sample_path):
+                with open(voice_sample_path, 'rb') as f:
+                    voice_audio_base64 = base64.b64encode(f.read()).decode('utf-8')
+            
             payload = {
                 "text": text,
-                "voice_sample_path": voice_sample_path,
+                "voice_audio_base64": voice_audio_base64,  # Send audio data, not path
                 "voice_transcript": voice_transcript,
                 "speed": speed,
                 "watermark": watermark
