@@ -1,0 +1,11 @@
+{
+  "access_enabled": false,
+  "users": [
+    {
+      "username": "demo_user",
+      "password_hash": "$2b$12$examplehash...",
+      "enabled": true,
+      "created_at": "2025-01-01T00:00:00Z"
+    }
+  ]
+}

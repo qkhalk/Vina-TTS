@@ -10,3 +10,7 @@ wheels/
 .venv
 output_audio/
 .env
+
+# User authentication data
+config/users.json
+config/users.json.bak

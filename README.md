@@ -121,6 +121,33 @@ uv sync
   ```
   This enables batch processing, Triton compilation, and KV cache quantization in the Gradio app.
 
+### 4. Configure Authentication (Required)
+
+VieNeu-TTS now includes admin/user role-based access control for production deployments.
+
+**Setup admin password:**
+
+```bash
+# Copy environment template
+cp .env.example .env
+
+# Edit .env and set a secure admin password (minimum 12 characters)
+# ADMIN_PASSWORD=your-secure-password-here
+```
+
+**Access the application:**
+
+- **User Interface**: Main page for TTS synthesis (tab: "🦜 TTS Service")
+- **Admin Panel**: System configuration and user management (tab: "⚙️ Admin Panel")
+  - Login with your `ADMIN_PASSWORD`
+  - Control model lifecycle (load/unload/restart)
+  - Manage user accounts
+  - Enable/disable user access protection
+
+**User Management:**
+
+Admin can create user accounts from the Admin Panel. When user access protection is enabled, users must login to use the TTS service.
+
 ---
 
 ## 🐋 Docker Deployment
