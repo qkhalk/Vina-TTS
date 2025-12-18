@@ -1,8 +1,18 @@
 import threading
 import torch
 import gc
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from enum import Enum
+
+
+# Voice compatibility for GGUF quantized models
+# These 4 voices are optimized for GGUF models (q4/q8) based on testing
+GGUF_OPTIMIZED_VOICES = [
+    "Vĩnh (nam miền Nam)",
+    "Bình (nam miền Bắc)",
+    "Ngọc (nữ miền Bắc)",
+    "Dung (nữ miền Nam)",
+]
 
 
 class ModelStatus(str, Enum):
@@ -45,6 +55,7 @@ class ModelManager:
             "error": self.error_message,
             "config": self.config.copy(),
             "backend": "LMDeploy" if self.using_lmdeploy else "Standard",
+            "supported_voices": self.get_supported_voices(),
         }
         
         if torch.cuda.is_available() and self.status == ModelStatus.LOADED:
@@ -259,6 +270,36 @@ class ModelManager:
             TTS model if loaded, None otherwise
         """
         return self.tts if self.status == ModelStatus.LOADED else None
+    
+    def get_supported_voices(self, all_voices: Optional[List[str]] = None) -> List[str]:
+        """
+        Get list of supported voice names based on current model configuration.
+        
+        GGUF backbone models are optimized for only 4 voices, regardless of codec.
+        Non-GGUF models support all voices.
+        
+        Args:
+            all_voices: List of all available voice names. If None, returns filtered list hint.
+        
+        Returns:
+            List of supported voice names
+        """
+        # If no model is loaded, return all voices (or empty list if none provided)
+        if self.status != ModelStatus.LOADED or not self.config:
+            return all_voices if all_voices is not None else []
+        
+        backbone_repo = self.config.get("backbone_repo", "")
+        
+        # Filter based on backbone type only (codec is irrelevant)
+        if "gguf" in backbone_repo.lower():
+            # GGUF models: only show optimized voices
+            if all_voices is not None:
+                return [v for v in GGUF_OPTIMIZED_VOICES if v in all_voices]
+            else:
+                return GGUF_OPTIMIZED_VOICES
+        else:
+            # Non-GGUF models: show all voices
+            return all_voices if all_voices is not None else []
     
     def _should_use_lmdeploy(self, backbone_repo: str, device: str) -> bool:
         """Determine if LMDeploy should be used."""

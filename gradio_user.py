@@ -35,6 +35,17 @@ def get_ref_text_cached(text_path: str) -> str:
         return f.read()
 
 
+def recover_user_session():
+    """Recover user session from localStorage on page load."""
+    return """
+    function() {
+        const token = localStorage.getItem('vieneu_user_session') || '';
+        console.log('Recovering user session:', token ? 'Token found' : 'No token');
+        return token;
+    }
+    """
+
+
 def user_login(username: str, password: str):
     """Handle user login."""
     if user_manager.verify_user(username, password):
@@ -51,6 +62,44 @@ def user_login(username: str, password: str):
             gr.update(visible=False),
             "",
             "❌ Invalid username or password"
+        )
+
+
+def validate_and_restore_user_session(token):
+    """Validate token and restore TTS interface."""
+    access_enabled = user_manager.is_access_enabled()
+    available_voices = get_available_voices()
+    
+    if not access_enabled:
+        # Access protection disabled - show TTS interface
+        return (
+            gr.update(visible=False),  # Hide login
+            gr.update(visible=True),   # Show TTS
+            token,                     # Keep token (might be empty)
+            "",                        # Clear login status
+            get_model_status_text(),   # Model status
+            gr.update(choices=available_voices, value=available_voices[0] if available_voices else None)  # Voice dropdown
+        )
+    
+    if not token or not validate_user_session(token):
+        # Invalid session - show login
+        return (
+            gr.update(visible=True),   # Show login
+            gr.update(visible=False),  # Hide TTS
+            "",                        # Clear token
+            "",                        # Clear login status
+            get_model_status_text(),   # Model status
+            gr.update(choices=available_voices, value=available_voices[0] if available_voices else None)  # Voice dropdown
+        )
+    else:
+        # Valid session - show TTS
+        return (
+            gr.update(visible=False),  # Hide login
+            gr.update(visible=True),   # Show TTS
+            token,                     # Keep token
+            "",                        # Clear login status
+            get_model_status_text(),   # Model status
+            gr.update(choices=available_voices, value=available_voices[0] if available_voices else None)  # Voice dropdown
         )
 
 
@@ -85,6 +134,18 @@ def get_model_status_text():
         return f"❌ Model Error: {status.get('error', 'Unknown error')}"
     else:
         return "⚠️ Model Not Loaded"
+
+
+def get_available_voices():
+    """Get list of available voices based on loaded model configuration."""
+    all_voices = list(VOICE_SAMPLES.keys())
+    supported_voices = model_manager.get_supported_voices(all_voices)
+    
+    # If model not loaded or no filtering needed, return all voices
+    if not supported_voices:
+        return all_voices
+    
+    return supported_voices
 
 
 def synthesize_tts(token, text, voice_choice, custom_audio, custom_text, mode_tab, use_batch):
@@ -214,7 +275,7 @@ def synthesize_tts(token, text, voice_choice, custom_audio, custom_text, mode_ta
 def create_user_interface():
     """Create user Gradio interface."""
     
-    with gr.Blocks(title="VieNeu-TTS") as user_interface:
+    with gr.Blocks(title="VieNeu-TTS", js=recover_user_session()) as user_interface:
         session_token = gr.State("")
         
         # Check if access protection is enabled
@@ -253,9 +314,10 @@ def create_user_interface():
                     
                     with gr.Tabs() as tabs:
                         with gr.TabItem("👤 Preset Voices", id="preset_mode"):
+                            available_voices = get_available_voices()
                             voice_select = gr.Dropdown(
-                                choices=list(VOICE_SAMPLES.keys()),
-                                value=list(VOICE_SAMPLES.keys())[0] if VOICE_SAMPLES else None,
+                                choices=available_voices,
+                                value=available_voices[0] if available_voices else None,
                                 label="Select Voice"
                             )
                         
@@ -281,20 +343,57 @@ def create_user_interface():
                     )
                     status_output = gr.Textbox(label="Status", interactive=False)
         
+        # JavaScript to store token in localStorage
+        store_token_js = """
+        function(login_visible, tts_visible, token, status) {
+            if (token) {
+                localStorage.setItem('vieneu_user_session', token);
+                console.log('User token stored in localStorage');
+            }
+            return [login_visible, tts_visible, token, status];
+        }
+        """
+        
         # Event handlers
         if access_enabled:
             login_btn.click(
                 fn=user_login,
                 inputs=[username_input, password_input],
-                outputs=[login_page, tts_interface, session_token, login_status]
+                outputs=[login_page, tts_interface, session_token, login_status],
+                js=store_token_js
             )
+        
+        # Load event to restore session
+        user_interface.load(
+            fn=validate_and_restore_user_session,
+            inputs=[session_token],
+            outputs=[
+                login_page,
+                tts_interface,
+                session_token,
+                login_status,
+                model_status,
+                voice_select
+            ]
+        )
         
         tabs.children[0].select(lambda: "preset_mode", outputs=current_mode)
         tabs.children[1].select(lambda: "custom_mode", outputs=current_mode)
         
+        def refresh_status_and_voices(current_voice):
+            """Refresh model status and update voice dropdown."""
+            status_text = get_model_status_text()
+            available_voices = get_available_voices()
+            
+            # If current voice is still in list, keep it; otherwise use first available
+            new_value = current_voice if current_voice in available_voices else (available_voices[0] if available_voices else None)
+            
+            return status_text, gr.update(choices=available_voices, value=new_value)
+        
         refresh_status_btn.click(
-            fn=lambda: get_model_status_text(),
-            outputs=[model_status]
+            fn=refresh_status_and_voices,
+            inputs=[voice_select],
+            outputs=[model_status, voice_select]
         )
         
         synthesize_btn.click(

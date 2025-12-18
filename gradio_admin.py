@@ -151,70 +151,102 @@ def get_users_list(token):
     if not users:
         return "No users registered"
     
-    lines = []
+    lines = ["| Username | Status | Created Date | Actions |",
+             "|----------|--------|--------------|---------|"]
     for user in users:
         status = "✅ Enabled" if user.enabled else "❌ Disabled"
-        lines.append(f"• **{user.username}** - {status} (Created: {user.created_at})")
+        lines.append(f"| {user.username} | {status} | {user.created_at} | - |")
     
     return "\n".join(lines)
+
+
+def get_users_list_for_dropdown(token):
+    """Get list of usernames for dropdown."""
+    if not validate_admin_session(token):
+        return []
+    
+    users = user_manager.get_all_users()
+    return [user.username for user in users]
 
 
 def add_user_action(token, username, password):
     """Admin action: Add user."""
     if not validate_admin_session(token):
-        return "❌ Unauthorized", gr.update()
+        return "❌ Unauthorized", gr.update(), gr.update()
     
     if not username or not password:
-        return "❌ Username and password required", gr.update()
+        return "❌ Username and password required", gr.update(), gr.update()
     
     if len(password) < 8:
-        return "❌ Password must be at least 8 characters", gr.update()
+        return "❌ Password must be at least 8 characters", gr.update(), gr.update()
     
     success = user_manager.add_user(username, password)
     
     if success:
         users_list = get_users_list(token)
-        return f"✅ User '{username}' added successfully", gr.update(value=users_list)
+        users_dropdown = get_users_list_for_dropdown(token)
+        return f"✅ User '{username}' added successfully", gr.update(value=users_list), gr.update(choices=users_dropdown)
     else:
-        return f"❌ Username '{username}' already exists", gr.update()
+        return f"❌ Username '{username}' already exists", gr.update(), gr.update()
 
 
 def remove_user_action(token, username):
     """Admin action: Remove user."""
     if not validate_admin_session(token):
-        return "❌ Unauthorized", gr.update()
+        return "❌ Unauthorized", gr.update(), gr.update()
     
     if not username:
-        return "❌ Username required", gr.update()
+        return "❌ Username required", gr.update(), gr.update()
     
     success = user_manager.remove_user(username)
     session_manager.invalidate_user_sessions(username)
     
     if success:
         users_list = get_users_list(token)
-        return f"✅ User '{username}' removed successfully", gr.update(value=users_list)
+        users_dropdown = get_users_list_for_dropdown(token)
+        return f"✅ User '{username}' removed successfully", gr.update(value=users_list), gr.update(choices=users_dropdown, value=None)
     else:
-        return f"❌ User '{username}' not found", gr.update()
+        return f"❌ User '{username}' not found", gr.update(), gr.update()
 
 
-def toggle_user_enabled_action(token, username, enabled):
-    """Admin action: Enable/disable user."""
+def enable_user_action(token, username):
+    """Admin action: Enable user."""
     if not validate_admin_session(token):
         return "❌ Unauthorized", gr.update()
     
     if not username:
-        return "❌ Username required", gr.update()
+        return "❌ Please select a user", gr.update()
     
-    success = user_manager.set_user_enabled(username, enabled)
+    success = user_manager.set_user_enabled(username, True)
     
     if success:
-        if not enabled:
-            session_manager.invalidate_user_sessions(username)
         users_list = get_users_list(token)
-        status_text = "enabled" if enabled else "disabled"
-        return f"✅ User '{username}' {status_text}", gr.update(value=users_list)
+        return f"✅ User '{username}' enabled", gr.update(value=users_list)
     else:
         return f"❌ User '{username}' not found", gr.update()
+
+
+def disable_user_action(token, username):
+    """Admin action: Disable user."""
+    if not validate_admin_session(token):
+        return "❌ Unauthorized", gr.update()
+    
+    if not username:
+        return "❌ Please select a user", gr.update()
+    
+    success = user_manager.set_user_enabled(username, False)
+    
+    if success:
+        session_manager.invalidate_user_sessions(username)
+        users_list = get_users_list(token)
+        return f"✅ User '{username}' disabled", gr.update(value=users_list)
+    else:
+        return f"❌ User '{username}' not found", gr.update()
+
+
+def refresh_user_data(token):
+    """Refresh user list and dropdown."""
+    return get_users_list(token), gr.update(choices=get_users_list_for_dropdown(token))
 
 
 def toggle_access_protection(token, enabled):
@@ -235,10 +267,59 @@ def refresh_model_status(token):
     return format_status(model_manager.get_status())
 
 
+def recover_admin_session():
+    """Recover admin session from localStorage on page load."""
+    return """
+    function() {
+        const token = localStorage.getItem('vieneu_admin_session') || '';
+        console.log('Recovering admin session:', token ? 'Token found' : 'No token');
+        return token;
+    }
+    """
+
+
+def admin_logout(token):
+    """Handle admin logout."""
+    if token:
+        session_manager.invalidate_session(token)
+    return (
+        gr.update(visible=True),   # Show login
+        gr.update(visible=False),  # Hide dashboard
+        "",                        # Clear token
+        "Logged out successfully"
+    )
+
+
+def validate_and_restore_admin_session(token):
+    """Validate token and restore dashboard state."""
+    if not token or not validate_admin_session(token):
+        # Invalid session - show login
+        return (
+            gr.update(visible=True),   # Show login
+            gr.update(visible=False),  # Hide dashboard
+            "",                        # Clear token
+            "",                        # Clear login status
+            format_status(model_manager.get_status()),  # Model status
+            user_manager.is_access_enabled(),           # Access protection
+            get_users_list(token) if token else "No users"  # User list
+        )
+    else:
+        # Valid session - show dashboard
+        return (
+            gr.update(visible=False),  # Hide login
+            gr.update(visible=True),   # Show dashboard
+            token,                     # Keep token
+            "",                        # Clear login status
+            format_status(model_manager.get_status()),  # Model status
+            user_manager.is_access_enabled(),           # Access protection
+            get_users_list(token)      # User list
+        )
+
+
 def create_admin_interface():
     """Create admin Gradio interface."""
     
-    with gr.Blocks(title="VieNeu-TTS Admin") as admin_interface:
+    with gr.Blocks(title="VieNeu-TTS Admin", js=recover_admin_session()) as admin_interface:
         session_token = gr.State("")
         
         # Login page
@@ -314,37 +395,85 @@ def create_admin_interface():
                 )
                 access_protection_status = gr.Markdown("")
                 
+                # Add User Section
+                with gr.Group():
+                    gr.Markdown("### ➕ Add New User")
+                    with gr.Row():
+                        new_username = gr.Textbox(label="Username", placeholder="username", scale=2)
+                        new_password = gr.Textbox(label="Password", type="password", placeholder="min 8 characters", scale=2)
+                        add_user_btn = gr.Button("Add User", variant="primary", scale=1)
+                    add_user_status = gr.Markdown("")
+                
+                # User List and Actions
+                gr.Markdown("### 📋 Registered Users")
+                users_list_display = gr.Markdown(get_users_list(session_token.value))
+                
+                with gr.Row():
+                    user_select = gr.Dropdown(
+                        label="Select User",
+                        choices=get_users_list_for_dropdown(session_token.value),
+                        scale=2
+                    )
+                    refresh_users_btn = gr.Button("🔄 Refresh", scale=1)
+                
+                # User Actions
                 with gr.Row():
                     with gr.Column():
-                        gr.Markdown("### Add User")
-                        new_username = gr.Textbox(label="Username", placeholder="username")
-                        new_password = gr.Textbox(label="Password", type="password", placeholder="min 8 characters")
-                        add_user_btn = gr.Button("➕ Add User", variant="primary")
-                        add_user_status = gr.Markdown("")
+                        enable_user_btn = gr.Button("✅ Enable User", variant="primary")
+                        enable_user_status = gr.Markdown("")
                     
                     with gr.Column():
-                        gr.Markdown("### Remove User")
-                        remove_username = gr.Textbox(label="Username", placeholder="username")
-                        remove_user_btn = gr.Button("➖ Remove User", variant="stop")
-                        remove_user_status = gr.Markdown("")
-                
-                with gr.Row():
+                        disable_user_btn = gr.Button("🚫 Disable User", variant="secondary")
+                        disable_user_status = gr.Markdown("")
+                    
                     with gr.Column():
-                        gr.Markdown("### Enable/Disable User")
-                        toggle_username = gr.Textbox(label="Username", placeholder="username")
-                        toggle_enabled = gr.Checkbox(label="Enabled", value=True)
-                        toggle_user_btn = gr.Button("🔄 Update Status")
-                        toggle_user_status = gr.Markdown("")
-                
-                gr.Markdown("### Current Users")
-                users_list_display = gr.Markdown(get_users_list(session_token.value))
-                refresh_users_btn = gr.Button("🔄 Refresh Users")
+                        remove_user_btn = gr.Button("🗑️ Remove User", variant="stop")
+                        remove_user_status = gr.Markdown("")
+        
+        # JavaScript to store token in localStorage
+        store_token_js = """
+        function(login_visible, dashboard_visible, token, status) {
+            if (token) {
+                localStorage.setItem('vieneu_admin_session', token);
+                console.log('Admin token stored in localStorage');
+            }
+            return [login_visible, dashboard_visible, token, status];
+        }
+        """
+        
+        # JavaScript to clear token from localStorage
+        clear_token_js = """
+        function(login_visible, dashboard_visible, token, status) {
+            localStorage.removeItem('vieneu_admin_session');
+            console.log('Admin token cleared from localStorage');
+            return [login_visible, dashboard_visible, token, status];
+        }
+        """
         
         # Event handlers
         login_btn.click(
             fn=admin_login,
             inputs=[admin_password],
-            outputs=[login_page, dashboard_page, session_token, login_status]
+            outputs=[login_page, dashboard_page, session_token, login_status],
+            js=store_token_js
+        )
+        
+        # Add logout button handler (if logout button exists)
+        # Note: We'll add explicit logout button in the dashboard
+        
+        # Load event to restore session
+        admin_interface.load(
+            fn=validate_and_restore_admin_session,
+            inputs=[session_token],
+            outputs=[
+                login_page,
+                dashboard_page,
+                session_token,
+                login_status,
+                model_status_display,
+                access_protection_check,
+                users_list_display
+            ]
         )
         
         load_model_btn.click(
@@ -380,25 +509,31 @@ def create_admin_interface():
         add_user_btn.click(
             fn=add_user_action,
             inputs=[session_token, new_username, new_password],
-            outputs=[add_user_status, users_list_display]
+            outputs=[add_user_status, users_list_display, user_select]
+        )
+        
+        enable_user_btn.click(
+            fn=enable_user_action,
+            inputs=[session_token, user_select],
+            outputs=[enable_user_status, users_list_display]
+        )
+        
+        disable_user_btn.click(
+            fn=disable_user_action,
+            inputs=[session_token, user_select],
+            outputs=[disable_user_status, users_list_display]
         )
         
         remove_user_btn.click(
             fn=remove_user_action,
-            inputs=[session_token, remove_username],
-            outputs=[remove_user_status, users_list_display]
-        )
-        
-        toggle_user_btn.click(
-            fn=toggle_user_enabled_action,
-            inputs=[session_token, toggle_username, toggle_enabled],
-            outputs=[toggle_user_status, users_list_display]
+            inputs=[session_token, user_select],
+            outputs=[remove_user_status, users_list_display, user_select]
         )
         
         refresh_users_btn.click(
-            fn=lambda token: get_users_list(token),
+            fn=refresh_user_data,
             inputs=[session_token],
-            outputs=[users_list_display]
+            outputs=[users_list_display, user_select]
         )
     
     return admin_interface
