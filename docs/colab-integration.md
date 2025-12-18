@@ -77,8 +77,9 @@ VieNeu-TTS supports **hybrid backend mode** - you can choose to run TTS processi
    - Wait for installation (first run takes ~5-10 minutes)
    - Cells will:
      - ✅ Install espeak-ng
-     - ✅ Install Python dependencies
+     - ✅ Install uv package manager
      - ✅ Clone VieNeu-TTS repository
+     - ✅ Run `uv sync` to install all dependencies (more stable!)
      - ✅ Load the model
      - ✅ Start FastAPI server
      - ✅ Create ngrok tunnel (using your token)
@@ -153,6 +154,80 @@ VieNeu-TTS supports **hybrid backend mode** - you can choose to run TTS processi
 ---
 
 ## Troubleshooting
+
+### Problem: "RuntimeError: Expected one of cpu, cuda, ... device type at start of device string: auto"
+
+**Cause:**
+- VieNeuTTS doesn't understand "auto" as a device string
+- Needs explicit "cuda" or "cpu"
+
+**Solution:**
+**Option A: Download NEW notebook** (Recommended)
+1. Go back to Admin UI
+2. Click **Download Colab Notebook** again (I just fixed it to handle "auto" properly)
+3. Upload the new notebook to Colab
+4. Run all cells - it will auto-detect cuda/cpu
+
+**Option B: Fix existing notebook manually**
+1. Find the line: `DEVICE = "{{ device }}"`
+2. Add these lines right after it:
+```python
+DEVICE = "auto"  # or whatever was generated
+
+# Add these lines:
+if DEVICE.lower() == "auto":
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Auto-detected device: {DEVICE}")
+```
+3. Re-run the FastAPI server cell
+
+---
+
+### Problem: "ModuleNotFoundError: No module named 'neucodec'" or "502 error responses"
+
+**Cause:**
+- VieNeu-TTS package and its dependencies (like `neucodec`) weren't installed
+- The notebook only cloned the repo but didn't install it
+
+**Solution:**
+**Option A: Download NEW notebook** (Recommended)
+1. Go back to Admin UI
+2. Click **Download Colab Notebook** again (I fixed the template to install dependencies)
+3. Upload the new notebook to Colab
+4. Run all cells
+
+**Option B: Fix existing notebook manually**
+1. First, add a new cell BEFORE the git clone cell:
+```python
+# Install uv
+!curl -LsSf https://astral.sh/uv/install.sh | sh
+import os
+os.environ['PATH'] = f"/root/.cargo/bin:{os.environ['PATH']}"
+!uv --version
+```
+
+2. Then find the cell with `!git clone https://github.com/pnnbao-ump/Vina-TTS.git` and update it:
+```python
+!git clone https://github.com/pnnbao-ump/Vina-TTS.git
+%cd Vina-TTS
+
+# Use uv sync instead of pip
+!uv sync
+!uv pip install fastapi uvicorn pyngrok nest-asyncio
+```
+
+3. In the FastAPI server cell, add these lines at the very top:
+```python
+# Activate uv virtual environment
+import sys
+sys.path.insert(0, '/content/Vina-TTS/.venv/lib/python3.12/site-packages')
+
+# Then the rest of the imports...
+```
+
+4. Re-run all the edited cells in order
+
+---
 
 ### Problem: "RuntimeError: asyncio.run() cannot be called from a running event loop"
 

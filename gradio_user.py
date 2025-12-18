@@ -126,8 +126,13 @@ def get_model_status_text():
     """Get user-friendly model status text."""
     status = model_manager.get_status()
     
+    # Check backend mode - if using Colab and connected, show ready
+    if status.get("backend_mode") == "remote" and status.get("colab_connected"):
+        return "✅ Model Ready (Google Colab)"
+    
+    # Otherwise check local model status
     if status["status"] == ModelStatus.LOADED:
-        return "✅ Model Ready"
+        return "✅ Model Ready (Local)"
     elif status["status"] == ModelStatus.LOADING:
         return "⏳ Model Loading..."
     elif status["status"] == ModelStatus.ERROR:

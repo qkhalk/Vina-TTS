@@ -275,7 +275,7 @@ def switch_backend_mode_action(token, mode):
         return f"❌ Error switching backend: {str(e)}"
 
 
-def generate_notebook_action(token, backbone, codec, device):
+def generate_notebook_action(token, backbone, codec, device, enable_triton, max_batch_size):
     """Admin action: Generate and download Colab notebook."""
     if not validate_admin_session(token):
         return "❌ Unauthorized", None
@@ -287,12 +287,14 @@ def generate_notebook_action(token, backbone, codec, device):
         if not backbone_config or not codec_config:
             return "❌ Invalid model configuration", None
         
-        # Generate notebook
+        # Generate notebook with advanced options
         generator = NotebookGenerator()
         notebook_json, auth_token = generator.generate(
             backbone_repo=backbone_config["repo"],
             codec_repo=codec_config["repo"],
-            device=device.lower()
+            device=device.lower(),
+            enable_triton=enable_triton,
+            max_batch_size=max_batch_size
         )
         
         # Save to temp file for download
@@ -319,6 +321,20 @@ def connect_colab_action(token, endpoint_url, auth_token):
     result = model_manager.set_colab_connection(endpoint_url.strip(), auth_token.strip())
     
     if result["success"]:
+        # Save config to config.yaml for persistence
+        try:
+            from colab.config_loader import save_colab_config
+            from colab.config import ColabConfig
+            
+            colab_config = ColabConfig(
+                enabled=True,
+                endpoint_url=endpoint_url.strip(),
+                auth_token=auth_token.strip()
+            )
+            save_colab_config(colab_config)
+        except Exception as e:
+            print(f"Warning: Failed to save Colab config: {e}")
+        
         status = f"✅ {result['message']}"
     else:
         status = f"❌ {result['message']}"
@@ -335,6 +351,16 @@ def disconnect_colab_action(token):
     result = model_manager.disconnect_colab()
     
     if result["success"]:
+        # Clear config from config.yaml
+        try:
+            from colab.config_loader import save_colab_config
+            from colab.config import ColabConfig
+            
+            empty_config = ColabConfig(enabled=False)
+            save_colab_config(empty_config)
+        except Exception as e:
+            print(f"Warning: Failed to clear Colab config: {e}")
+        
         status = f"✅ {result['message']}"
     else:
         status = f"❌ {result['message']}"
@@ -422,6 +448,20 @@ def admin_logout(token):
 
 def validate_and_restore_admin_session(token):
     """Validate token and restore dashboard state."""
+    # Try to restore Colab config from config.yaml on page load
+    try:
+        from colab.config_loader import load_colab_config
+        colab_config = load_colab_config()
+        
+        if colab_config.enabled and colab_config.is_valid():
+            # Restore Colab connection
+            model_manager.set_colab_connection(
+                colab_config.endpoint_url,
+                colab_config.auth_token
+            )
+    except Exception as e:
+        print(f"Warning: Failed to restore Colab config: {e}")
+    
     if not token or not validate_admin_session(token):
         # Invalid session - show login
         return (
@@ -431,7 +471,8 @@ def validate_and_restore_admin_session(token):
             "",                        # Clear login status
             format_status(model_manager.get_status()),  # Model status
             user_manager.is_access_enabled(),           # Access protection
-            get_users_list(token) if token else "No users"  # User list
+            get_users_list(token) if token else "No users",  # User list
+            format_colab_status()      # Colab status
         )
     else:
         # Valid session - show dashboard
@@ -442,7 +483,8 @@ def validate_and_restore_admin_session(token):
             "",                        # Clear login status
             format_status(model_manager.get_status()),  # Model status
             user_manager.is_access_enabled(),           # Access protection
-            get_users_list(token)      # User list
+            get_users_list(token),     # User list
+            format_colab_status()      # Colab status
         )
 
 
@@ -467,9 +509,10 @@ def create_admin_interface():
         with gr.Column(visible=False) as dashboard_page:
             gr.Markdown("# ⚙️ VieNeu-TTS Admin Dashboard")
             
-            # Model Control Panel
+            # Model Control Panel (LOCAL ONLY)
             with gr.Group():
-                gr.Markdown("## 🦜 Model Control")
+                gr.Markdown("## 🦜 Model Control (Local Machine)")
+                gr.Markdown("*Configure and load model on your local machine. For Google Colab, see Backend Selection below.*")
                 
                 with gr.Row():
                     with gr.Column(scale=2):
@@ -545,7 +588,7 @@ def create_admin_interface():
                 # Colab Configuration
                 with gr.Accordion("⚙️ Colab Configuration", open=False):
                     gr.Markdown("### Step 1: Generate Notebook")
-                    gr.Markdown("Configure model settings and download a pre-configured Colab notebook.")
+                    gr.Markdown("Configure model settings and download a pre-configured Colab notebook. Settings below apply to Colab backend only.")
                     
                     with gr.Row():
                         notebook_backbone = gr.Dropdown(
@@ -565,6 +608,21 @@ def create_admin_interface():
                             value="Auto",
                             label="Device",
                             scale=1
+                        )
+                    
+                    with gr.Row():
+                        notebook_enable_triton = gr.Checkbox(
+                            value=True,
+                            label="Enable Triton",
+                            info="Triton compilation for faster GPU inference (CUDA only)"
+                        )
+                        notebook_max_batch = gr.Slider(
+                            minimum=1,
+                            maximum=16,
+                            value=8,
+                            step=1,
+                            label="Max Batch Size",
+                            info="Maximum batch size for LMDeploy backend"
                         )
                     
                     generate_notebook_btn = gr.Button("📥 Download Colab Notebook", variant="primary")
@@ -684,7 +742,8 @@ def create_admin_interface():
                 login_status,
                 model_status_display,
                 access_protection_check,
-                users_list_display
+                users_list_display,
+                colab_backend_status
             ]
         )
         
@@ -757,7 +816,7 @@ def create_admin_interface():
         
         generate_notebook_btn.click(
             fn=generate_notebook_action,
-            inputs=[session_token, notebook_backbone, notebook_codec, notebook_device],
+            inputs=[session_token, notebook_backbone, notebook_codec, notebook_device, notebook_enable_triton, notebook_max_batch],
             outputs=[notebook_status, notebook_file]
         )
         

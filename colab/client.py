@@ -135,6 +135,59 @@ class ColabTTSClient:
         except Exception as e:
             return False, f"Connection failed: {str(e)}", None
     
+    def encode_reference(self, audio_path: str):
+        """
+        Dummy method for interface compatibility.
+        Colab backend handles encoding internally, so this returns None.
+        
+        Args:
+            audio_path: Path to reference audio (not used)
+            
+        Returns:
+            None (encoding handled by Colab backend)
+        """
+        # Colab backend handles reference encoding internally
+        # Return None to signal that no codes are needed from client side
+        return None
+    
+    def tts(
+        self,
+        text: str,
+        voice_sample_path: str,
+        voice_transcript: str,
+        speed: float = 1.0,
+        watermark: bool = True
+    ) -> tuple:
+        """
+        TTS synthesis matching VieNeuTTS interface.
+        
+        Args:
+            text: Text to synthesize
+            voice_sample_path: Path to voice sample audio
+            voice_transcript: Transcript of voice sample
+            speed: Speech speed multiplier
+            watermark: Whether to add audio watermark
+            
+        Returns:
+            Tuple of (audio_array, sample_rate)
+        """
+        import numpy as np
+        import soundfile as sf
+        import io
+        
+        audio_bytes = self.synthesize(
+            text=text,
+            voice_sample_path=voice_sample_path,
+            voice_transcript=voice_transcript,
+            speed=speed,
+            watermark=watermark
+        )
+        
+        # Decode audio bytes to numpy array
+        audio_array, sample_rate = sf.read(io.BytesIO(audio_bytes))
+        
+        return audio_array, sample_rate
+    
     def __del__(self):
         """Cleanup session on deletion."""
         if hasattr(self, 'session'):

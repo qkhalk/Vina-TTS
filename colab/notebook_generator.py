@@ -29,6 +29,8 @@ class NotebookGenerator:
         backbone_repo: str,
         codec_repo: str,
         device: str = "auto",
+        enable_triton: bool = True,
+        max_batch_size: int = 8,
         auth_token: str = None
     ) -> tuple[str, str]:
         """
@@ -38,6 +40,8 @@ class NotebookGenerator:
             backbone_repo: HuggingFace repo for backbone model
             codec_repo: HuggingFace repo for codec model
             device: Device to use (auto/cuda/cpu)
+            enable_triton: Enable Triton compilation (for CUDA)
+            max_batch_size: Maximum batch size for inference
             auth_token: Authentication token (generated if not provided)
             
         Returns:
@@ -56,6 +60,8 @@ class NotebookGenerator:
             "{{ backbone_repo }}": backbone_repo,
             "{{ codec_repo }}": codec_repo,
             "{{ device }}": device,
+            "{{ enable_triton }}": str(enable_triton),
+            "{{ max_batch_size }}": str(max_batch_size),
             "{{ auth_token }}": auth_token
         }
         
