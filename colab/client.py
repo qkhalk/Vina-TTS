@@ -24,6 +24,10 @@ class ColabTTSClient:
         self.auth_token = auth_token
         self.timeout = timeout
         
+        # Cache for voice sample path and transcript
+        self._cached_voice_path = None
+        self._cached_voice_transcript = None
+        
         # Setup session with retry logic
         self.session = requests.Session()
         retry_strategy = Retry(
@@ -135,18 +139,23 @@ class ColabTTSClient:
         except Exception as e:
             return False, f"Connection failed: {str(e)}", None
     
-    def encode_reference(self, audio_path: str):
+    def encode_reference(self, audio_path: str, transcript: str = None):
         """
-        Dummy method for interface compatibility.
+        Cache reference audio path for later use in infer().
         Colab backend handles encoding internally, so this returns None.
         
         Args:
-            audio_path: Path to reference audio (not used)
+            audio_path: Path to reference audio
+            transcript: Optional transcript (will be provided in infer call)
             
         Returns:
             None (encoding handled by Colab backend)
         """
-        # Colab backend handles reference encoding internally
+        # Cache the voice sample path for use in infer()
+        self._cached_voice_path = audio_path
+        if transcript:
+            self._cached_voice_transcript = transcript
+        
         # Return None to signal that no codes are needed from client side
         return None
     
@@ -187,6 +196,53 @@ class ColabTTSClient:
         audio_array, sample_rate = sf.read(io.BytesIO(audio_bytes))
         
         return audio_array, sample_rate
+    
+    def infer(self, text: str, ref_codes, ref_text: str):
+        """
+        Inference method matching VieNeuTTS interface.
+        
+        Args:
+            text: Text to synthesize
+            ref_codes: Reference codes (not used by Colab backend)
+            ref_text: Reference transcript
+            
+        Returns:
+            Audio array (numpy)
+        """
+        import numpy as np
+        import soundfile as sf
+        import io
+        
+        # Use cached voice sample path from encode_reference call
+        voice_path = self._cached_voice_path or ""
+        
+        audio_bytes = self.synthesize(
+            text=text,
+            voice_sample_path=voice_path,
+            voice_transcript=ref_text,
+            speed=1.0,
+            watermark=True
+        )
+        
+        # Decode audio bytes to numpy array
+        audio_array, sample_rate = sf.read(io.BytesIO(audio_bytes))
+        
+        return audio_array
+    
+    def infer_batch(self, text_chunks: list, ref_codes, ref_text: str):
+        """
+        Batch inference method.
+        
+        Args:
+            text_chunks: List of text chunks to synthesize
+            ref_codes: Reference codes (not used by Colab backend)
+            ref_text: Reference transcript
+            
+        Returns:
+            List of audio arrays
+        """
+        # Process sequentially (Colab backend doesn't support true batching)
+        return [self.infer(chunk, ref_codes, ref_text) for chunk in text_chunks]
     
     def __del__(self):
         """Cleanup session on deletion."""

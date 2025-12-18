@@ -117,8 +117,14 @@ def validate_user_session(token: str):
 
 
 def check_model_ready():
-    """Check if model is loaded and ready."""
+    """Check if model is loaded and ready (local or Colab backend)."""
     status = model_manager.get_status()
+    
+    # Check backend mode - if using Colab and connected, model is ready
+    if status.get("backend_mode") == "remote" and status.get("colab_connected"):
+        return True
+    
+    # Otherwise check local model status
     return status["status"] == ModelStatus.LOADED
 
 
