@@ -24,10 +24,11 @@ VieNeu-TTS supports **hybrid backend mode** - you can choose to run TTS processi
 - ✅ **Google Account** (for Google Colab access)
 - ✅ **VieNeu-TTS** running with admin access
 
-### Optional
-- ⭐ **ngrok Account** (free tier works) - For custom tunnel URLs
+### Required for Colab Connection
+- ⭐ **ngrok Account** (free tier works) - **REQUIRED** for tunnel connection
   - Sign up at: https://ngrok.com/
-  - Get your auth token from dashboard
+  - Get your auth token from: https://dashboard.ngrok.com/get-started/your-authtoken
+  - Copy the full token (long alphanumeric string)
 
 ---
 
@@ -60,7 +61,18 @@ VieNeu-TTS supports **hybrid backend mode** - you can choose to run TTS processi
    - Set **Hardware accelerator** to **GPU** (T4)
    - Click **Save**
 
-4. **Run All Cells**
+4. **Configure ngrok Token (IMPORTANT!)**
+   - Before running cells, find the cell with `NGROK_TOKEN = "YOUR_NGROK_TOKEN"`
+   - Get your ngrok token:
+     - Go to: https://dashboard.ngrok.com/get-started/your-authtoken
+     - Copy your authtoken (should look like: `2abc...XYZ` - long alphanumeric)
+   - Replace `"YOUR_NGROK_TOKEN"` with your actual token:
+     ```python
+     NGROK_TOKEN = "2abc...YourActualTokenHere...XYZ"
+     ```
+   - ⚠️ **Don't skip this!** Without a valid token, the connection will fail
+
+5. **Run All Cells**
    - Click **Runtime** → **Run all**
    - Wait for installation (first run takes ~5-10 minutes)
    - Cells will:
@@ -69,9 +81,9 @@ VieNeu-TTS supports **hybrid backend mode** - you can choose to run TTS processi
      - ✅ Clone VieNeu-TTS repository
      - ✅ Load the model
      - ✅ Start FastAPI server
-     - ✅ Create ngrok tunnel
+     - ✅ Create ngrok tunnel (using your token)
 
-5. **Copy Connection Details**
+6. **Copy Connection Details**
    - Scroll to the bottom of the last cell
    - You'll see output like:
      ```
@@ -141,6 +153,65 @@ VieNeu-TTS supports **hybrid backend mode** - you can choose to run TTS processi
 ---
 
 ## Troubleshooting
+
+### Problem: "RuntimeError: asyncio.run() cannot be called from a running event loop"
+
+**Cause:**
+- Colab runs in an existing asyncio event loop
+- Old notebook version uses `uvicorn.run()` which tries to create a new loop
+
+**Solution:**
+**Option A: Download NEW notebook** (Recommended)
+1. Go back to Admin UI
+2. Click **Download Colab Notebook** again (I fixed the template)
+3. Upload the new notebook to Colab
+4. Delete the old notebook
+
+**Option B: Fix the existing notebook manually**
+1. In Colab, find the LAST cell with `uvicorn.run(app, host="0.0.0.0", port=8000)`
+2. Replace that line with:
+```python
+# Start server (Colab-compatible)
+import asyncio
+from uvicorn import Config, Server
+
+config = Config(app=app, host="0.0.0.0", port=8000, log_level="info")
+server = Server(config)
+
+# Run server in the existing event loop
+await server.serve()
+```
+3. Re-run the cell
+
+---
+
+### Problem: "The authtoken you specified does not look like a proper ngrok authtoken"
+
+**Possible Causes:**
+- ngrok token not configured in notebook
+- Wrong token copied (extra spaces, incomplete)
+- Old/revoked token
+
+**Solution:**
+1. **Get fresh token from ngrok dashboard:**
+   - Go to: https://dashboard.ngrok.com/get-started/your-authtoken
+   - Copy the FULL token (should be ~50+ characters)
+
+2. **In Colab notebook, edit the last cell:**
+   - Find line: `NGROK_TOKEN = "YOUR_NGROK_TOKEN"`
+   - Replace with: `NGROK_TOKEN = "2abc...your-actual-token...XYZ"`
+   - Make sure no extra spaces or quotes
+
+3. **Re-run just the last cell** (FastAPI + ngrok)
+   - Don't need to restart whole notebook
+   - Just click the play button on that cell again
+
+4. **Verify token format:**
+   - Should look like: `2abcDEF123xyz...` (alphanumeric, ~50-70 chars)
+   - Should NOT have quotes inside the string
+   - Should NOT have spaces at start/end
+
+---
 
 ### Problem: "Connection test failed: Connection refused"
 
